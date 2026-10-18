@@ -163,7 +163,7 @@ partition) and an older Linux partition, without root. Then:
 - Test on real hardware: UEFI and BIOS machines, NVMe, Secure Boot with the signed shim.
 - Dual boot: shrink a Windows partition from the installer; hardware clock in local time next to Windows.
 - Encryption (LUKS) of the root partition, a separate home partition.
-- Move the shared language, keyboard and time zone code of the login greeter (amade-system) and this
+- Move the shared language, keyboard and time zone code of the login greeter (amadeos-system) and this
   assistant into amade-commons.
 
 ## License
