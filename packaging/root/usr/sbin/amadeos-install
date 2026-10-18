@@ -216,9 +216,10 @@ if [ -n "$DISK" ]; then
     grep -qs "^$DISK\|^$(readlink -f "$DISK")" /proc/swaps && fail "$DISK is in use as swap"
     case "$SWAP" in
         none|0|"") SWAP="none" ;;
-        [1-9][0-9]*[MG]) ;;
-        *) fail "--swap must be none or a size such as 2G or 4096M" ;;
     esac
+    if [ "$SWAP" != none ] && ! [[ "$SWAP" =~ ^[1-9][0-9]*[MG]$ ]]; then
+        fail "--swap must be none or a size such as 2G or 4096M"
+    fi
 else
     is_block "$ROOT_PARTITION" || fail "$ROOT_PARTITION is not a block device"
     [ "$(dev_type "$ROOT_PARTITION")" = "part" ] || fail "$ROOT_PARTITION is not a partition"
