@@ -1,0 +1,9 @@
+// amadeOS: members of sudo (the live user is one) may run the installer as root without a password
+// prompt; the live session has no authentication agent that could ask for one. The installer itself
+// asks for confirmation before it writes to a disk.
+polkit.addRule(function (action, subject) {
+    if (action.id === "org.datazuul.amadeos.installer.install" && subject.local && subject.active
+            && subject.isInGroup("sudo")) {
+        return polkit.Result.YES;
+    }
+});

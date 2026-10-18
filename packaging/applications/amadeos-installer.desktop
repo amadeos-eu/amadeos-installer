@@ -1,0 +1,24 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install amadeOS
+Name[de]=amadeOS installieren
+Name[fr]=Installer amadeOS
+Name[es]=Instalar amadeOS
+Name[it]=Installare amadeOS
+GenericName=System Installer
+GenericName[de]=Systeminstallation
+GenericName[fr]=Installateur du système
+GenericName[es]=Instalador del sistema
+GenericName[it]=Installazione del sistema
+Comment=Install this live system onto a hard disk
+Comment[de]=Dieses Live-System auf eine Festplatte installieren
+Comment[fr]=Installer ce système live sur un disque dur
+Comment[es]=Instalar este sistema en vivo en un disco duro
+Comment[it]=Installare questo sistema live su un disco fisso
+Icon=amadeos-installer
+Exec=/usr/bin/amadeos-installer
+Terminal=false
+Categories=System;Settings;
+Keywords=install;installer;disk;harddisk;setup;
+StartupNotify=true

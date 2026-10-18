@@ -1,0 +1,497 @@
+#!/bin/bash
+# amadeos-install: installs the running amadeOS live system onto a disk.
+#
+# The live image is a squashfs (filesystem.squashfs on the boot medium). Installing means: partition
+# and format the target, unpack the squashfs onto it, take out what only the live boot needs
+# (live-boot, live-config, the live user's password hook), write the settings the user chose (host
+# name, locale, keyboard, time zone, user), build an initramfs without live-boot and install GRUB
+# for UEFI or BIOS. Nothing is downloaded: everything the installed system needs is in the image.
+#
+# The wizard (amadeos-installer) runs this script through pkexec with --config FILE --yes and reads
+# the "@@" lines of its output; the options do the same for an unattended install. Without --yes the
+# script only prints what it would do.
+#
+# Exit codes: 0 done, 1 wrong usage or a failed check (nothing written), 2 failed while installing.
+set -euo pipefail
+
+VERSION="0.1.0"
+TOTAL_STEPS=10
+SOURCE_DEFAULT="/run/live/medium/live/filesystem.squashfs"
+TARGET_DEFAULT="/mnt/amadeos-install"
+LOG_FILE="/var/log/amadeos-install.log"
+# The GRUB meta packages (grub-pc, grub-efi-amd64) the live image cannot hold both of; the image
+# build puts their .deb files here so that the installed system gets the one for its firmware and
+# later GRUB upgrades reinstall the boot loader (see amadeos: config/hooks/normal/020-amadeos-packages.chroot).
+META_DEBS="/var/lib/amadeos-installer"
+# The groups of the live user (amadeos: config/includes.chroot/etc/live/config.conf); the new user
+# gets those of them that exist.
+USER_GROUPS="audio cdrom dip floppy video plugdev netdev powerdev scanner bluetooth lpadmin systemd-journal sudo"
+# GPT partition types
+TYPE_BIOS_BOOT="21686148-6449-6E6F-744E-656564454649"
+TYPE_EFI="C12A7328-F81B-11D2-BA4B-00A0C93EC93B"
+TYPE_SWAP="0657FD6D-A4AB-43C4-84E5-0933C84B4F4F"
+TYPE_LINUX="0FC63DAF-8483-4772-8E79-3D69D8477DE4"
+
+# ---- settings (options or --config) --------------------------------------------------------------
+DISK=""
+ROOT_PARTITION=""
+EFI_PARTITION=""
+SWAP="none"
+NEW_HOSTNAME="amadeos"
+USERNAME=""
+FULLNAME=""
+PASSWORD=""
+PASSWORD_HASH=""
+LOCALE="en_US.UTF-8"
+KEYBOARD="us"
+KEYBOARD_VARIANT=""
+TIMEZONE="UTC"
+FIRMWARE="auto"
+SOURCE="$SOURCE_DEFAULT"
+TARGET="$TARGET_DEFAULT"
+YES=0
+KEEP_TARGET=0
+FORCE=0
+
+usage() {
+    cat <<EOF
+Usage: amadeos-install [OPTIONS] --yes
+       amadeos-install --config FILE --yes
+
+Installs the running amadeOS live system onto a disk. Without --yes nothing is written; the plan is
+printed instead. The target: either a whole disk, which is erased and partitioned (GPT: BIOS boot,
+EFI System, optional swap, root), or an existing partition, which is formatted.
+
+Target
+  --disk DEVICE              erase this disk and install onto it, e.g. /dev/sda
+  --swap SIZE                swap partition on that disk: none (default) or a size like 2G, 4096M
+  --root-partition DEVICE    instead of --disk: format this partition and install into it
+  --efi-partition DEVICE     with --root-partition on UEFI: the EFI System Partition to use
+                             (default: the first one on the same disk; formatted only if empty)
+System
+  --hostname NAME            host name (default: amadeos)
+  --user NAME                login name of the first user (required)
+  --fullname "NAME"          the user's full name
+  --password-hash HASH       the user's password as a crypt(3) hash, e.g. from mkpasswd -m yescrypt;
+                             a plain password can be given in the --config file only (PASSWORD=)
+  --locale LOCALE            e.g. de_DE.UTF-8 (default: en_US.UTF-8)
+  --keyboard LAYOUT          XKB layout, e.g. de (default: us)
+  --keyboard-variant VARIANT XKB variant, e.g. nodeadkeys
+  --timezone ZONE            e.g. Europe/Berlin (default: UTC)
+  --firmware auto|uefi|bios  boot loader to install (default: auto, as the live system booted)
+Run
+  --config FILE              read the settings from FILE (KEY=VALUE per line, keys as the options in
+                             upper case with _ : DISK, SWAP, ROOT_PARTITION, EFI_PARTITION, HOSTNAME,
+                             USERNAME, FULLNAME, PASSWORD, PASSWORD_HASH, LOCALE, KEYBOARD,
+                             KEYBOARD_VARIANT, TIMEZONE, FIRMWARE)
+  --yes                      write to the disk; without it the plan is printed only
+  --source FILE              the squashfs to install (default: $SOURCE_DEFAULT)
+  --target DIR               mount point for the installation (default: $TARGET_DEFAULT)
+  --keep-target              leave the installed system mounted at the end
+  --force                    install although this is not a live system
+  --version, --help
+
+Progress lines for the wizard: "@@step N/$TOTAL_STEPS ID", "@@percent N" while copying, "@@done" at the
+end, "@@error MESSAGE" when a check or step failed. A log is kept in $LOG_FILE and copied into the
+installed system.
+EOF
+}
+
+say() { printf '%s\n' "$*"; }
+step() { printf '@@step %d/%d %s\n== %s\n' "$1" "$TOTAL_STEPS" "$2" "$3"; }
+FAIL_REPORTED=0
+fail() {
+    FAIL_REPORTED=1
+    printf '@@error %s\n' "$*"
+    echo "amadeos-install: $*" >&2
+    exit "${FAIL_CODE:-1}"
+}
+
+# ---- options -------------------------------------------------------------------------------------
+read_config() {
+    local file="$1" line key value
+    [ -r "$file" ] || fail "Cannot read the configuration file $file"
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        [[ "$line" == *=* ]] || fail "Bad line in $file: $line"
+        key="${line%%=*}"
+        value="${line#*=}"
+        case "$key" in
+            DISK) DISK="$value" ;;
+            SWAP) SWAP="$value" ;;
+            ROOT_PARTITION) ROOT_PARTITION="$value" ;;
+            EFI_PARTITION) EFI_PARTITION="$value" ;;
+            HOSTNAME) NEW_HOSTNAME="$value" ;;
+            USERNAME) USERNAME="$value" ;;
+            FULLNAME) FULLNAME="$value" ;;
+            PASSWORD) PASSWORD="$value" ;;
+            PASSWORD_HASH) PASSWORD_HASH="$value" ;;
+            LOCALE) LOCALE="$value" ;;
+            KEYBOARD) KEYBOARD="$value" ;;
+            KEYBOARD_VARIANT) KEYBOARD_VARIANT="$value" ;;
+            TIMEZONE) TIMEZONE="$value" ;;
+            FIRMWARE) FIRMWARE="$value" ;;
+            *) fail "Unknown key in $file: $key" ;;
+        esac
+    done < "$file"
+}
+
+need_arg() { [ $# -ge 2 ] || fail "Option $1 needs a value (see --help)"; }
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --disk) need_arg "$@"; DISK="$2"; shift ;;
+        --swap) need_arg "$@"; SWAP="$2"; shift ;;
+        --root-partition) need_arg "$@"; ROOT_PARTITION="$2"; shift ;;
+        --efi-partition) need_arg "$@"; EFI_PARTITION="$2"; shift ;;
+        --hostname) need_arg "$@"; NEW_HOSTNAME="$2"; shift ;;
+        --user) need_arg "$@"; USERNAME="$2"; shift ;;
+        --fullname) need_arg "$@"; FULLNAME="$2"; shift ;;
+        --password-hash) need_arg "$@"; PASSWORD_HASH="$2"; shift ;;
+        --locale) need_arg "$@"; LOCALE="$2"; shift ;;
+        --keyboard) need_arg "$@"; KEYBOARD="$2"; shift ;;
+        --keyboard-variant) need_arg "$@"; KEYBOARD_VARIANT="$2"; shift ;;
+        --timezone) need_arg "$@"; TIMEZONE="$2"; shift ;;
+        --firmware) need_arg "$@"; FIRMWARE="$2"; shift ;;
+        --config) need_arg "$@"; read_config "$2"; shift ;;
+        --source) need_arg "$@"; SOURCE="$2"; shift ;;
+        --target) need_arg "$@"; TARGET="$2"; shift ;;
+        --yes) YES=1 ;;
+        --keep-target) KEEP_TARGET=1 ;;
+        --force) FORCE=1 ;;
+        --version) say "amadeos-install $VERSION"; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
+        *) fail "Unknown option: $1 (see --help)" ;;
+    esac
+    shift
+done
+
+# ---- checks (nothing is written before they all passed) ------------------------------------------
+[ "$(id -u)" -eq 0 ] || fail "amadeos-install must run as root"
+
+if [ -d /sys/firmware/efi ]; then BOOTED="uefi"; else BOOTED="bios"; fi
+case "$FIRMWARE" in
+    auto) FIRMWARE="$BOOTED" ;;
+    uefi|bios) ;;
+    *) fail "--firmware must be auto, uefi or bios" ;;
+esac
+if [ "$FIRMWARE" = "uefi" ] && [ "$BOOTED" = "bios" ]; then
+    fail "A UEFI boot loader can only be installed from a system booted with UEFI (this one booted with BIOS); use --firmware bios"
+fi
+
+if ! grep -qw 'boot=live' /proc/cmdline && [ "$FORCE" = 0 ]; then
+    fail "This is not a live system (no boot=live on the kernel command line); use --force to install anyway"
+fi
+[ -f "$SOURCE" ] || fail "The live system image $SOURCE was not found"
+
+for tool in lsblk blkid findmnt wipefs sfdisk mkfs.fat mkfs.ext4 mkswap unsquashfs udevadm chroot; do
+    command -v "$tool" >/dev/null 2>&1 || fail "$tool is missing on this system"
+done
+
+is_block() { [ -b "$1" ]; }
+dev_type() { lsblk -dno TYPE "$1" 2>/dev/null; }
+parent_disk() {
+    local pk
+    pk="$(lsblk -no PKNAME "$1" 2>/dev/null | head -n1)"
+    if [ -n "$pk" ]; then echo "/dev/$pk"; else echo "$1"; fi
+}
+# The disk the live system runs from (the USB stick or the ISO in the drive) must never be the target.
+live_disk() {
+    local src
+    src="$(findmnt -no SOURCE /run/live/medium 2>/dev/null || true)"
+    src="${src%%\[*}"
+    [ -n "$src" ] && is_block "$src" || return 0
+    parent_disk "$src"
+}
+LIVE_DISK="$(live_disk)"
+in_use() { [ -n "$(lsblk -no MOUNTPOINTS "$1" 2>/dev/null | tr -d '[:space:]')" ]; }
+
+if [ -n "$DISK" ] && [ -n "$ROOT_PARTITION" ]; then fail "Give either --disk or --root-partition, not both"; fi
+if [ -z "$DISK" ] && [ -z "$ROOT_PARTITION" ]; then fail "A target is needed: --disk DEVICE or --root-partition DEVICE"; fi
+
+if [ -n "$DISK" ]; then
+    is_block "$DISK" || fail "$DISK is not a block device"
+    [ "$(dev_type "$DISK")" = "disk" ] || fail "$DISK is not a whole disk (type $(dev_type "$DISK"))"
+    [ "$DISK" != "$LIVE_DISK" ] || fail "$DISK is the disk the live system runs from"
+    ! in_use "$DISK" || fail "$DISK has mounted file systems; unmount them first"
+    grep -qs "^$DISK\|^$(readlink -f "$DISK")" /proc/swaps && fail "$DISK is in use as swap"
+    case "$SWAP" in
+        none|0|"") SWAP="none" ;;
+        [1-9][0-9]*[MG]) ;;
+        *) fail "--swap must be none or a size such as 2G or 4096M" ;;
+    esac
+else
+    is_block "$ROOT_PARTITION" || fail "$ROOT_PARTITION is not a block device"
+    [ "$(dev_type "$ROOT_PARTITION")" = "part" ] || fail "$ROOT_PARTITION is not a partition"
+    ! in_use "$ROOT_PARTITION" || fail "$ROOT_PARTITION is mounted; unmount it first"
+    DISK_OF_ROOT="$(parent_disk "$ROOT_PARTITION")"
+    [ "$DISK_OF_ROOT" != "$LIVE_DISK" ] || fail "$ROOT_PARTITION is on the disk the live system runs from"
+    if [ "$FIRMWARE" = "uefi" ]; then
+        if [ -z "$EFI_PARTITION" ]; then
+            EFI_PARTITION="$(lsblk -nrpo NAME,PARTTYPE "$DISK_OF_ROOT" \
+                | awk -v t="$(echo "$TYPE_EFI" | tr 'A-Z' 'a-z')" 'tolower($2) == t { print $1; exit }')"
+            [ -n "$EFI_PARTITION" ] || fail "No EFI System Partition on $DISK_OF_ROOT; give one with --efi-partition"
+        fi
+        is_block "$EFI_PARTITION" || fail "$EFI_PARTITION is not a block device"
+        [ "$EFI_PARTITION" != "$ROOT_PARTITION" ] || fail "The EFI System Partition cannot be the root partition"
+        ! in_use "$EFI_PARTITION" || fail "$EFI_PARTITION is mounted; unmount it first"
+    fi
+    SWAP="none"
+fi
+
+[[ "$NEW_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
+    || fail "Host name '$NEW_HOSTNAME' is not valid (letters, digits and hyphens, 1 to 63 characters)"
+[ -n "$USERNAME" ] || fail "A user name is needed (--user)"
+[[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
+    || fail "User name '$USERNAME' is not valid (lower-case letters, digits, _ and -, starting with a letter)"
+[ "$USERNAME" != "root" ] || fail "The user cannot be root"
+[ -n "$PASSWORD" ] || [ -n "$PASSWORD_HASH" ] || fail "A password is needed (PASSWORD in the config file or --password-hash)"
+[[ "$FULLNAME" != *[:,=]* && "$FULLNAME" != *$'\n'* ]] || fail "The full name may not contain : , or ="
+[[ "$LOCALE" =~ ^[a-z]{2,3}_[A-Z]{2}(\.UTF-8)?$ ]] || fail "Locale '$LOCALE' is not valid (e.g. de_DE.UTF-8)"
+if ! locale -a 2>/dev/null | grep -qix "${LOCALE/UTF-8/utf8}"; then
+    fail "Locale $LOCALE is not generated on this system (locale -a lists the available ones)"
+fi
+[[ "$KEYBOARD" =~ ^[a-z]{2,8}(,[a-z]{2,8})*$ ]] || fail "Keyboard layout '$KEYBOARD' is not valid"
+[[ "$KEYBOARD_VARIANT" =~ ^[a-zA-Z0-9_,-]*$ ]] || fail "Keyboard variant '$KEYBOARD_VARIANT' is not valid"
+[[ "$TIMEZONE" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$ ]] && [ -f "/usr/share/zoneinfo/$TIMEZONE" ] \
+    || fail "Time zone '$TIMEZONE' is unknown"
+[ ! -e "$TARGET" ] || [ -d "$TARGET" ] || fail "$TARGET exists and is not a directory"
+! mountpoint -q "$TARGET" 2>/dev/null || fail "$TARGET is already a mount point"
+
+# ---- the plan -------------------------------------------------------------------------------------
+say "amadeOS installation"
+say "  Source:     $SOURCE"
+if [ -n "$DISK" ]; then
+    say "  Target:     $DISK (whole disk: $(lsblk -dno SIZE,MODEL "$DISK" | tr -s ' '))"
+    say "              GPT with BIOS boot (1M), EFI System (512M)$( [ "$SWAP" != none ] && echo ", swap ($SWAP)"), root (ext4, the rest)"
+else
+    say "  Target:     $ROOT_PARTITION (formatted ext4)$( [ -n "$EFI_PARTITION" ] && echo ", EFI System Partition $EFI_PARTITION")"
+fi
+say "  Firmware:   $FIRMWARE"
+say "  Host name:  $NEW_HOSTNAME"
+say "  User:       $USERNAME${FULLNAME:+ ($FULLNAME)}"
+say "  Locale:     $LOCALE"
+say "  Keyboard:   $KEYBOARD${KEYBOARD_VARIANT:+ ($KEYBOARD_VARIANT)}"
+say "  Time zone:  $TIMEZONE"
+if [ "$YES" != 1 ]; then
+    say ""
+    say "Nothing was written. Add --yes to install."
+    exit 0
+fi
+
+# ---- install --------------------------------------------------------------------------------------
+FAIL_CODE=2
+mkdir -p "$(dirname "$LOG_FILE")"
+: > "$LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
+say "Log: $LOG_FILE ($(date -u '+%Y-%m-%d %H:%M:%S UTC'))"
+
+MOUNTED=0
+cleanup() {
+    local status=$?
+    set +e
+    if [ "$MOUNTED" = 1 ]; then
+        rm -f "$TARGET/usr/sbin/policy-rc.d"
+        if [ "$KEEP_TARGET" = 1 ] && [ "$status" -eq 0 ]; then
+            say "The installed system stays mounted at $TARGET (--keep-target)"
+        else
+            sync
+            umount -R "$TARGET" 2>/dev/null || umount -lR "$TARGET" 2>/dev/null || true
+        fi
+    fi
+    if [ "$status" -ne 0 ] && [ "$FAIL_REPORTED" = 0 ]; then
+        printf '@@error The installation failed (step %s); see %s\n' "${CURRENT_STEP:-?}" "$LOG_FILE"
+    fi
+}
+trap cleanup EXIT
+CURRENT_STEP=""
+begin() { CURRENT_STEP="$2"; step "$1" "$2" "$3"; }
+run() { say "+ $*"; "$@"; }
+in_target() { chroot "$TARGET" /usr/bin/env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 "$@"; }
+partition_of() {  # partition_of DISK NUMBER
+    lsblk -nrpo NAME,PARTN "$1" | awk -v n="$2" '$2 == n { print $1; exit }'
+}
+
+begin 1 partition "Partitioning"
+if [ -n "$DISK" ]; then
+    run wipefs --all "$DISK"
+    {
+        echo "label: gpt"
+        echo "size=1M, type=$TYPE_BIOS_BOOT, name=\"BIOS boot\""
+        echo "size=512M, type=$TYPE_EFI, name=\"EFI System\""
+        [ "$SWAP" != none ] && echo "size=$SWAP, type=$TYPE_SWAP, name=\"swap\""
+        echo "type=$TYPE_LINUX, name=\"amadeOS\""
+    } | run sfdisk --quiet --wipe always --wipe-partitions always "$DISK"
+    run udevadm settle
+    EFI_PARTITION="$(partition_of "$DISK" 2)"
+    if [ "$SWAP" != none ]; then
+        SWAP_PARTITION="$(partition_of "$DISK" 3)"
+        ROOT_PARTITION="$(partition_of "$DISK" 4)"
+    else
+        SWAP_PARTITION=""
+        ROOT_PARTITION="$(partition_of "$DISK" 3)"
+    fi
+    [ -b "$ROOT_PARTITION" ] && [ -b "$EFI_PARTITION" ] || fail "The new partitions of $DISK did not appear"
+    DISK_OF_ROOT="$DISK"
+    FORMAT_EFI=1
+else
+    say "Keeping the partition table of $DISK_OF_ROOT"
+    SWAP_PARTITION=""
+    FORMAT_EFI=0
+    if [ -n "$EFI_PARTITION" ] && [ -z "$(blkid -s TYPE -o value "$EFI_PARTITION" 2>/dev/null)" ]; then
+        FORMAT_EFI=1
+    fi
+fi
+
+begin 2 format "Formatting"
+run mkfs.ext4 -q -F -L amadeos "$ROOT_PARTITION"
+if [ -n "$EFI_PARTITION" ] && [ "$FORMAT_EFI" = 1 ]; then
+    run mkfs.fat -F 32 -n EFI "$EFI_PARTITION" >/dev/null
+fi
+[ -z "$SWAP_PARTITION" ] || run mkswap -q -L swap "$SWAP_PARTITION"
+run udevadm settle
+
+begin 3 mount "Mounting the target"
+mkdir -p "$TARGET"
+run mount "$ROOT_PARTITION" "$TARGET"
+MOUNTED=1
+if [ -n "$EFI_PARTITION" ]; then
+    mkdir -p "$TARGET/boot/efi"
+    run mount "$EFI_PARTITION" "$TARGET/boot/efi"
+fi
+
+begin 4 copy "Copying the system"
+# -percentage prints the progress as one number per line (squashfs-tools 4.5+).
+unsquashfs -force -dest "$TARGET" -percentage "$SOURCE" \
+    | awk '/^[0-9]+$/ { print "@@percent " $1; fflush(); next } { print; fflush() }'
+
+begin 5 live "Removing the parts of the live system"
+# /dev, /proc, /sys and /run of the running system for dpkg, update-initramfs and grub-install.
+run mount --rbind /dev "$TARGET/dev"; mount --make-rslave "$TARGET/dev"
+run mount -t proc proc "$TARGET/proc"
+run mount --rbind /sys "$TARGET/sys"; mount --make-rslave "$TARGET/sys"
+run mount --rbind /run "$TARGET/run"; mount --make-rslave "$TARGET/run"
+# No service may start inside the chroot.
+printf '#!/bin/sh\nexit 101\n' > "$TARGET/usr/sbin/policy-rc.d"
+chmod 0755 "$TARGET/usr/sbin/policy-rc.d"
+# dpkg-query exits non-zero for the packages that are not installed; only the installed ones matter.
+LIVE_PACKAGES="$({ in_target dpkg-query -W -f='${Package} ${db:Status-Status}\n' \
+    live-boot live-boot-initramfs-tools live-boot-doc live-config live-config-systemd live-config-doc live-tools \
+    amadeos-installer 2>/dev/null || true; } | awk '$2 == "installed" { print $1 }' | tr '\n' ' ')"
+if [ -n "$LIVE_PACKAGES" ]; then
+    # shellcheck disable=SC2086
+    run in_target apt-get --yes --quiet purge $LIVE_PACKAGES
+fi
+rm -rf "$TARGET/etc/live" "$TARGET/usr/local/bin/amadeos-live-user" \
+    "$TARGET/etc/systemd/system/amadeos-dm.service.d/live.conf" "$TARGET/etc/profile.d/zz-live-config_xinit.sh"
+rmdir "$TARGET/etc/systemd/system/amadeos-dm.service.d" 2>/dev/null || true
+# live-build's list of the local packages it installed, if it survived the image build.
+{ grep -ls 'file:/root/packages' "$TARGET"/etc/apt/sources.list.d/* 2>/dev/null || true; } | xargs -r rm -f
+rm -rf "$TARGET/root/packages"
+
+begin 6 configure "Writing the system settings"
+say "$NEW_HOSTNAME" > "$TARGET/etc/hostname"
+cat > "$TARGET/etc/hosts" <<EOF
+127.0.0.1	localhost
+127.0.1.1	$NEW_HOSTNAME
+
+::1		localhost ip6-localhost ip6-loopback
+ff02::1		ip6-allnodes
+ff02::2		ip6-allrouters
+EOF
+ROOT_UUID="$(blkid -s UUID -o value "$ROOT_PARTITION")"
+{
+    echo "# /etc/fstab: static file system information, written by amadeos-install."
+    echo "# <file system> <mount point> <type> <options> <dump> <pass>"
+    echo "UUID=$ROOT_UUID / ext4 errors=remount-ro 0 1"
+    if [ -n "$EFI_PARTITION" ]; then
+        echo "UUID=$(blkid -s UUID -o value "$EFI_PARTITION") /boot/efi vfat umask=0077 0 1"
+    fi
+    if [ -n "$SWAP_PARTITION" ]; then
+        echo "UUID=$(blkid -s UUID -o value "$SWAP_PARTITION") none swap sw 0 0"
+    fi
+} > "$TARGET/etc/fstab"
+say "LANG=$LOCALE" > "$TARGET/etc/default/locale"
+cat > "$TARGET/etc/default/keyboard" <<EOF
+# KEYBOARD CONFIGURATION FILE, written by amadeos-install (see keyboard(5))
+XKBMODEL="pc105"
+XKBLAYOUT="$KEYBOARD"
+XKBVARIANT="$KEYBOARD_VARIANT"
+XKBOPTIONS=""
+BACKSPACE="guess"
+EOF
+ln -sfn "/usr/share/zoneinfo/$TIMEZONE" "$TARGET/etc/localtime"
+say "$TIMEZONE" > "$TARGET/etc/timezone"
+# A machine id of its own, not the one of the image.
+rm -f "$TARGET/etc/machine-id" "$TARGET/var/lib/dbus/machine-id"
+run systemd-machine-id-setup --root="$TARGET"
+if [ -d "$TARGET/var/lib/dbus" ]; then ln -s /etc/machine-id "$TARGET/var/lib/dbus/machine-id"; fi
+# The network connections set up in the live session (WLAN passwords included) carry over.
+if compgen -G "/etc/NetworkManager/system-connections/*" >/dev/null; then
+    mkdir -p "$TARGET/etc/NetworkManager/system-connections"
+    cp -a /etc/NetworkManager/system-connections/. "$TARGET/etc/NetworkManager/system-connections/"
+    chmod 0600 "$TARGET"/etc/NetworkManager/system-connections/*
+    say "Copied the network connections of the live session"
+fi
+
+begin 7 user "Creating the user"
+if in_target getent passwd "$USERNAME" >/dev/null; then
+    fail "The user $USERNAME already exists in the image"
+fi
+GROUPS_FOUND=""
+for group in $USER_GROUPS; do
+    in_target getent group "$group" >/dev/null && GROUPS_FOUND="${GROUPS_FOUND:+$GROUPS_FOUND,}$group"
+done
+run in_target useradd --create-home --user-group --shell /bin/bash --comment "$FULLNAME" \
+    ${GROUPS_FOUND:+--groups "$GROUPS_FOUND"} "$USERNAME"
+if [ -n "$PASSWORD_HASH" ]; then
+    printf '%s:%s\n' "$USERNAME" "$PASSWORD_HASH" | in_target chpasswd --encrypted
+else
+    printf '%s:%s\n' "$USERNAME" "$PASSWORD" | in_target chpasswd
+fi
+say "User $USERNAME created (groups: ${GROUPS_FOUND:-none})"
+# No root password: administration goes through the user's sudo.
+in_target passwd --quiet --lock root >/dev/null 2>&1 || true
+
+begin 8 initramfs "Building the initial RAM disk"
+run in_target update-initramfs -u -k all
+
+begin 9 bootloader "Installing the boot loader ($FIRMWARE)"
+if [ ! -f "$TARGET/etc/default/grub" ] && [ -f "$TARGET/usr/share/grub/default/grub" ]; then
+    cp "$TARGET/usr/share/grub/default/grub" "$TARGET/etc/default/grub"
+fi
+if [ -f "$TARGET/etc/default/grub" ]; then
+    sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="amadeOS"/' "$TARGET/etc/default/grub"
+    grep -q '^GRUB_DISTRIBUTOR=' "$TARGET/etc/default/grub" || echo 'GRUB_DISTRIBUTOR="amadeOS"' >> "$TARGET/etc/default/grub"
+fi
+install_meta() {  # install_meta PACKAGE: the GRUB meta package, so that upgrades reinstall GRUB
+    local deb
+    deb="$(ls "$TARGET$META_DEBS/${1}_"*.deb 2>/dev/null | head -n1)"
+    if [ -z "$deb" ]; then
+        say "No $1 package in $META_DEBS; GRUB upgrades will need grub-install by hand"
+        return 0
+    fi
+    say "Installing ${deb#"$TARGET"}"
+    in_target dpkg -i "${deb#"$TARGET"}" || say "Warning: $1 could not be configured; the boot loader is installed anyway"
+}
+if [ "$FIRMWARE" = "uefi" ]; then
+    [ -n "$EFI_PARTITION" ] || fail "UEFI needs an EFI System Partition"
+    # The signed shim and GRUB are used when shim-signed and grub-efi-amd64-signed are installed, so
+    # the system also boots with Secure Boot on. The second, removable installation (EFI/BOOT/BOOTX64.EFI)
+    # is for firmware that forgets its boot entries, and for QEMU without persistent variables.
+    run in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=amadeos --recheck
+    run in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram
+    printf 'grub-efi-amd64 grub2/force_efi_extra_removable boolean true\n' | in_target debconf-set-selections
+    install_meta grub-efi-amd64
+else
+    run in_target grub-install --target=i386-pc --recheck "$DISK_OF_ROOT"
+    printf 'grub-pc grub-pc/install_devices multiselect %s\n' "$DISK_OF_ROOT" | in_target debconf-set-selections
+    install_meta grub-pc
+fi
+run in_target update-grub
+
+begin 10 finish "Finishing"
+rm -rf "$TARGET$META_DEBS"
+cp "$LOG_FILE" "$TARGET/var/log/amadeos-install.log" 2>/dev/null || true
+sync
+say "amadeOS is installed on $ROOT_PARTITION ($DISK_OF_ROOT). Remove the live medium and restart."
+printf '@@done\n'

@@ -1,0 +1,159 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'org.datazuul.amadeos'
+version = '0.1.0'
+
+def mainClassName = 'org.datazuul.amadeos.installer.bootstrap.AmadeosInstallerApplication'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+application {
+    mainClass = mainClassName
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+}
+
+dependencies {
+    // Theme, Motif look, start-up and language handling shared by all amadeOS applications.
+    // With ../amade-commons checked out, settings.gradle builds that checkout instead (composite build).
+    implementation 'com.github.datazuul:amade-commons:9ac895f610'
+
+    runtimeOnly 'ch.qos.logback:logback-classic:1.5.18'
+
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    // Tests compare English texts, whatever the language of the build machine.
+    systemProperty 'user.language', 'en'
+    systemProperty 'user.country', 'US'
+}
+
+jar {
+    archiveBaseName = 'amadeos-installer'
+    manifest {
+        attributes(
+            'Main-Class': mainClassName,
+            'Implementation-Title': 'amadeos-installer',
+            'Implementation-Version': project.version
+        )
+    }
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    // Signed dependency jars would otherwise invalidate the fat jar.
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.register('deb') {
+    dependsOn jar
+    description = 'Builds the Debian package amadeos-installer (wizard, amadeos-install, polkit files)'
+    group = 'distribution'
+
+    doLast {
+        def buildDirFile = layout.buildDirectory.get().asFile
+        def stagingDir = new File(buildDirFile, 'deb-staging')
+        delete(stagingDir)
+
+        def optDir = new File(stagingDir, 'opt/amadeos-installer')
+        def binDir = new File(stagingDir, 'usr/bin')
+        def appDir = new File(stagingDir, 'usr/share/applications')
+        def iconDir = new File(stagingDir, 'usr/share/icons/hicolor/48x48/apps')
+        def docDir = new File(stagingDir, 'usr/share/doc/amadeos-installer')
+        def debianDir = new File(stagingDir, 'DEBIAN')
+        def distDir = new File(buildDirFile, 'distributions')
+        [optDir, binDir, appDir, iconDir, docDir, debianDir, distDir]*.mkdirs()
+
+        copy {
+            from jar.archiveFile
+            into optDir
+            rename { 'amadeos-installer.jar' }
+        }
+        new File(binDir, 'amadeos-installer').text = """#!/bin/sh
+exec /usr/bin/java -jar /opt/amadeos-installer/amadeos-installer.jar "\$@"
+"""
+        // packaging/root mirrors the file system: usr/sbin/amadeos-install, the polkit action and rule.
+        copy {
+            from 'packaging/root'
+            into stagingDir
+        }
+        copy {
+            from 'packaging/applications/amadeos-installer.desktop'
+            into appDir
+        }
+        copy {
+            from 'src/main/resources/icons/amadeos-installer.png'
+            into iconDir
+        }
+        copy {
+            from 'LICENSE'
+            into docDir
+            rename { 'copyright' }
+        }
+        // Debian permissions whatever the umask of the checkout: directories 0755, programs 0755, files 0644.
+        fileTree(stagingDir).visit { details ->
+            def path = details.relativePath.pathString
+            def executable = details.isDirectory() || path.startsWith('usr/bin/') || path.startsWith('usr/sbin/')
+            java.nio.file.Files.setPosixFilePermissions(details.file.toPath(),
+                java.nio.file.attribute.PosixFilePermissions.fromString(executable ? 'rwxr-xr-x' : 'rw-r--r--'))
+        }
+
+        new File(debianDir, 'control').text = """Package: amadeos-installer
+Version: ${project.version}
+Section: admin
+Priority: optional
+Architecture: all
+Depends: openjdk-25-jre | java-runtime (>= 25), squashfs-tools, dosfstools, e2fsprogs, grub2-common, grub-pc-bin, grub-efi-amd64-bin, efibootmgr, pkexec, polkitd
+Recommends: shim-signed, grub-efi-amd64-signed
+Maintainer: amadeOS Project <developers@datazuul.com>
+Description: Installs the amadeOS live system onto a disk
+ A step-by-step assistant in the CDE style (language, keyboard, time zone,
+ target disk, first user) and the script amadeos-install, which partitions
+ the disk, copies the live system, removes the live-only parts and installs
+ GRUB for UEFI or BIOS. Meant for the live image; the installed system does
+ not keep it.
+"""
+
+        def debFile = new File(distDir, "amadeos-installer_${project.version}_all.deb")
+        def process = new ProcessBuilder('dpkg-deb', '--root-owner-group', '--build',
+                stagingDir.absolutePath, debFile.absolutePath)
+                .redirectErrorStream(true)
+                .start()
+        process.inputStream.eachLine { println it }
+        if (process.waitFor() != 0) {
+            throw new GradleException('dpkg-deb failed')
+        }
+        println "[deb] Created ${debFile.absolutePath}"
+    }
+}
+
+tasks.register('installToAmadeOs') {
+    dependsOn 'deb'
+    description = 'Builds and drops the .deb package into ../amadeos/config/packages.chroot/'
+    group = 'distribution'
+
+    doLast {
+        def targetDir = file('../amadeos/config/packages.chroot')
+        targetDir.mkdirs()
+        def debFile = new File(layout.buildDirectory.get().asFile, "distributions/amadeos-installer_${project.version}_all.deb")
+        copy {
+            from debFile
+            into targetDir
+        }
+        println "[installToAmadeOs] Copied ${debFile.name} to ${targetDir.absolutePath}"
+    }
+}
