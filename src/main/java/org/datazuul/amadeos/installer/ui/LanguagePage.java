@@ -5,40 +5,40 @@ import org.datazuul.amadeos.commons.i18n.Mnemonics;
 import org.datazuul.amadeos.installer.domain.InstallSettings;
 import org.datazuul.amadeos.installer.service.SystemFacts;
 
-import javax.swing.Box;
-import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JTextArea;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Insets;
 
 /** Welcome, and the language of the installed system (and of the wizard from here on). */
 final class LanguagePage extends WizardPage {
     LanguagePage(InstallerWindow window, InstallSettings settings, SystemFacts facts) {
         super(window, settings);
-        JPanel column = new JPanel();
-        column.setLayout(new BoxLayout(column, BoxLayout.Y_AXIS));
-        // Every child left-aligned, or BoxLayout centres the narrower ones.
-        JTextArea intro = paragraph(tr("language.intro"));
-        intro.setAlignmentX(LEFT_ALIGNMENT);
-        column.add(intro);
-        column.add(Box.createVerticalStrut(18));
+        // The intro at the top like on every page; the form below it in a holder, so that it keeps its
+        // preferred height instead of being squeezed or centred.
+        add(paragraph(tr("language.intro")), BorderLayout.NORTH);
 
         JComboBox<Language> languages = new JComboBox<>(Language.values());
-        languages.setRenderer(new javax.swing.DefaultListCellRenderer() {
+        languages.setRenderer(new DefaultListCellRenderer() {
             @Override
-            public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value, int index,
-                                                                   boolean selected, boolean focus) {
+            public Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                                                          boolean selected, boolean focus) {
                 super.getListCellRendererComponent(list, value, index, selected, focus);
                 if (value instanceof Language language) setText(language.nativeName());
                 return this;
             }
         });
         languages.setSelectedItem(settings.language());
+        languages.setPreferredSize(new Dimension(240, languages.getPreferredSize().height));
         languages.addActionListener(e -> {
             Language chosen = (Language) languages.getSelectedItem();
             if (chosen != null && chosen != settings.language()) {
@@ -48,22 +48,34 @@ final class LanguagePage extends WizardPage {
         });
         JLabel label = Mnemonics.apply(new JLabel(), tr("language.label"));
         label.setLabelFor(languages);
-        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        row.add(label);
-        row.add(Box.createHorizontalStrut(8));
-        languages.setPreferredSize(new Dimension(240, languages.getPreferredSize().height));
-        row.add(languages);
-        row.setAlignmentX(LEFT_ALIGNMENT);
-        column.add(row);
 
+        JPanel form = new JPanel(new GridBagLayout());
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0;
+        c.gridy = 0;
+        c.anchor = GridBagConstraints.LINE_START;
+        c.insets = new Insets(8, 0, 0, 8);
+        form.add(label, c);
+        c.gridx = 1;
+        c.insets = new Insets(8, 0, 0, 0);
+        form.add(languages, c);
+        // Takes the rest of the row, so that label and list stay at the left.
+        c.gridx = 2;
+        c.weightx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        form.add(new JPanel(), c);
         if (!facts.isLiveSystem()) {
-            column.add(Box.createVerticalStrut(18));
             JTextArea warning = paragraph(tr("language.not-live"));
             warning.setForeground(new Color(0xA0, 0x10, 0x10));
-            warning.setAlignmentX(LEFT_ALIGNMENT);
-            column.add(warning);
+            c.gridx = 0;
+            c.gridy = 1;
+            c.gridwidth = 3;
+            c.insets = new Insets(18, 0, 0, 0);
+            form.add(warning, c);
         }
-        add(column, BorderLayout.NORTH);
+        JPanel holder = new JPanel(new BorderLayout());
+        holder.add(form, BorderLayout.NORTH);
+        add(holder, BorderLayout.CENTER);
     }
 
     @Override
