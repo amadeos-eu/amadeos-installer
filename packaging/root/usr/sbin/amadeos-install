@@ -28,7 +28,7 @@ META_DEBS="/var/lib/amadeos-installer"
 USER_GROUPS="audio cdrom dip floppy video plugdev netdev powerdev scanner bluetooth lpadmin systemd-journal sudo"
 # GPT partition types
 TYPE_BIOS_BOOT="21686148-6449-6E6F-744E-656564454649"
-TYPE_EFI="C12A7328-F81B-11D2-BA4B-00A0C93EC93B"
+TYPE_EFI="C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
 TYPE_SWAP="0657FD6D-A4AB-43C4-84E5-0933C84B4F4F"
 TYPE_LINUX="0FC63DAF-8483-4772-8E79-3D69D8477DE4"
 
@@ -463,6 +463,13 @@ fi
 if [ -f "$TARGET/etc/default/grub" ]; then
     sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="amadeOS"/' "$TARGET/etc/default/grub"
     grep -q '^GRUB_DISTRIBUTOR=' "$TARGET/etc/default/grub" || echo 'GRUB_DISTRIBUTOR="amadeOS"' >> "$TARGET/etc/default/grub"
+    # Other systems on the computer (Windows, an older Linux) get their GRUB entries from os-prober,
+    # which GRUB leaves switched off unless asked; the menu stays visible so that they can be chosen.
+    if [ -x "$TARGET/usr/bin/os-prober" ]; then
+        sed -i -e 's/^#\?GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' \
+               -e 's/^#\?GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' "$TARGET/etc/default/grub"
+        grep -q '^GRUB_DISABLE_OS_PROBER=' "$TARGET/etc/default/grub" || echo 'GRUB_DISABLE_OS_PROBER=false' >> "$TARGET/etc/default/grub"
+    fi
 fi
 install_meta() {  # install_meta PACKAGE: the GRUB meta package, so that upgrades reinstall GRUB
     local deb
@@ -480,14 +487,22 @@ if [ "$FIRMWARE" = "uefi" ]; then
     # the system also boots with Secure Boot on. The second, removable installation (EFI/BOOT/BOOTX64.EFI)
     # is for firmware that forgets its boot entries, and for QEMU without persistent variables.
     run in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=amadeos --recheck
-    run in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram
-    printf 'grub-efi-amd64 grub2/force_efi_extra_removable boolean true\n' | in_target debconf-set-selections
+    # The removable copy only where no other system keeps its fallback loader: on a shared EFI System
+    # Partition, EFI/BOOT/BOOTX64.EFI is Windows' copy of its boot manager and stays.
+    if [ "$FORMAT_EFI" = 1 ] || [ ! -e "$TARGET/boot/efi/EFI/BOOT/BOOTX64.EFI" ]; then
+        run in_target grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram
+        printf 'grub-efi-amd64 grub2/force_efi_extra_removable boolean true\n' | in_target debconf-set-selections
+    else
+        say "Keeping the existing EFI/BOOT/BOOTX64.EFI of another system; amadeOS boots through its own entry"
+        printf 'grub-efi-amd64 grub2/force_efi_extra_removable boolean false\n' | in_target debconf-set-selections
+    fi
     install_meta grub-efi-amd64
 else
     run in_target grub-install --target=i386-pc --recheck "$DISK_OF_ROOT"
     printf 'grub-pc grub-pc/install_devices multiselect %s\n' "$DISK_OF_ROOT" | in_target debconf-set-selections
     install_meta grub-pc
 fi
+# update-grub lists what os-prober found ("Found Windows Boot Manager on ..."), so the log shows it.
 run in_target update-grub
 
 begin 10 finish "Finishing"

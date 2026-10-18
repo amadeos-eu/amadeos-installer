@@ -24,7 +24,7 @@ public record BlockDevice(String name, String path, long size, String model, Str
                           boolean readOnly, List<String> mountPoints, String parentName, String fsType,
                           String transport, String partType, String label) {
     /** GPT type of an EFI System Partition. */
-    public static final String EFI_SYSTEM_TYPE = "c12a7328-f81b-11d2-ba4b-00a0c93ec93b";
+    public static final String EFI_SYSTEM_TYPE = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b";
 
     public BlockDevice {
         mountPoints = List.copyOf(mountPoints);

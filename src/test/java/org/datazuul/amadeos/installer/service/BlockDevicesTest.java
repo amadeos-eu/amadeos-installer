@@ -15,7 +15,7 @@ class BlockDevicesTest {
     private static final String LSBLK = """
             NAME="loop0" PATH="/dev/loop0" SIZE="3221225472" MODEL="" TYPE="loop" RM="0" RO="1" MOUNTPOINTS="/run/live/rootfs/filesystem.squashfs" PKNAME="" FSTYPE="squashfs" TRAN="" PARTTYPE="" LABEL=""
             NAME="sda" PATH="/dev/sda" SIZE="500107862016" MODEL="Samsung SSD 860" TYPE="disk" RM="0" RO="0" MOUNTPOINTS="" PKNAME="" FSTYPE="" TRAN="sata" PARTTYPE="" LABEL=""
-            NAME="sda1" PATH="/dev/sda1" SIZE="536870912" MODEL="" TYPE="part" RM="0" RO="0" MOUNTPOINTS="" PKNAME="sda" FSTYPE="vfat" TRAN="" PARTTYPE="c12a7328-f81b-11d2-ba4b-00a0c93ec93b" LABEL="EFI"
+            NAME="sda1" PATH="/dev/sda1" SIZE="536870912" MODEL="" TYPE="part" RM="0" RO="0" MOUNTPOINTS="" PKNAME="sda" FSTYPE="vfat" TRAN="" PARTTYPE="c12a7328-f81f-11d2-ba4b-00a0c93ec93b" LABEL="EFI"
             NAME="sda2" PATH="/dev/sda2" SIZE="499570991104" MODEL="" TYPE="part" RM="0" RO="0" MOUNTPOINTS="" PKNAME="sda" FSTYPE="ext4" TRAN="" PARTTYPE="0fc63daf-8483-4772-8e79-3d69d8477de4" LABEL="Old\\x20Data"
             NAME="sdb" PATH="/dev/sdb" SIZE="15518924800" MODEL="DataTraveler 3.0" TYPE="disk" RM="1" RO="0" MOUNTPOINTS="" PKNAME="" FSTYPE="iso9660" TRAN="usb" PARTTYPE="" LABEL="amadeos"
             NAME="sdb1" PATH="/dev/sdb1" SIZE="3300000000" MODEL="" TYPE="part" RM="1" RO="0" MOUNTPOINTS="/run/live/medium" PKNAME="sdb" FSTYPE="iso9660" TRAN="" PARTTYPE="0x0" LABEL="amadeos"

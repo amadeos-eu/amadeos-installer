@@ -8,8 +8,9 @@ work as root.
 ![Java](https://img.shields.io/badge/Java-25-orange)
 ![Debian](https://img.shields.io/badge/Debian-package-red)
 
-> Status: early development (0.1.0), not yet tested on a real machine. Whole-disk and single-partition
-> installations, UEFI and BIOS. No encryption, no separate home partition, no dual-boot assistance yet.
+> Status: early development (0.1.0). A whole-disk BIOS installation in QEMU boots into the desktop;
+> the UEFI path and the existing-partition mode next to Windows are being tested; no real machine yet.
+> No encryption, no separate home partition, no shrinking of partitions.
 
 ---
 
@@ -90,6 +91,22 @@ system (`--force` overrides the last one). Progress goes to standard output as `
 `@@percent N`, `@@done` and `@@error MESSAGE` lines for the assistant, with the commands run in
 between.
 
+## Next to Windows
+
+Choose *Install into an existing partition* and the partition that amadeOS should take (an older
+Linux, or an empty partition made with a partitioning tool beforehand). The other partitions stay.
+On UEFI machines the EFI System Partition of the disk is shared: amadeOS puts its own loader into
+`EFI/amadeos` and keeps Windows' files, including the fallback loader `EFI/BOOT/BOOTX64.EFI`.
+`os-prober` is switched on in the installed GRUB, so the boot menu offers *Windows Boot Manager*
+next to amadeOS.
+
+Before doing this on a laptop: switch Secure Boot off to boot the live stick (the live image's own
+loader is unsigned; the installed system boots with Secure Boot on again through Debian's signed
+shim), have the BitLocker recovery key at hand in case Windows asks for it after the firmware's boot
+entries changed, and switch off Windows' fast startup if its partitions should be readable from
+amadeOS. Windows keeps the hardware clock in local time, Linux in UTC; the clock may be off by the
+time zone offset in one of them until that is settled, which the installer does not do yet.
+
 ## Building
 
 ```bash
@@ -120,10 +137,19 @@ In the amadeos repository, `run-qemu.sh --install-disk` adds an empty 20 GB disk
 (`artifacts/install-disk.qcow2`), `--uefi` boots with OVMF. Install from the live system in the virtual
 machine, then boot the disk alone with `run-qemu.sh --boot-disk [--uefi]`.
 
+For the existing-partition mode, `scripts/make-dualboot-test-disk.sh dualboot.qcow2` makes a disk that
+looks like a laptop with Windows (an EFI System Partition with the files os-prober looks for, an NTFS
+partition) and an older Linux partition, without root. Then:
+
+```bash
+./run-qemu.sh --install-disk /path/to/dualboot.qcow2 --uefi     # choose the ext4 partition in the wizard
+./run-qemu.sh --boot-disk /path/to/dualboot.qcow2 --uefi        # GRUB should list Windows Boot Manager
+```
+
 ## Roadmap
 
 - Test on real hardware: UEFI and BIOS machines, NVMe, Secure Boot with the signed shim.
-- Dual boot: shrink a partition, keep the other system's boot entry (`os-prober`).
+- Dual boot: shrink a Windows partition from the installer; hardware clock in local time next to Windows.
 - Encryption (LUKS) of the root partition, a separate home partition.
 - Move the shared language, keyboard and time zone code of the login greeter (amade-system) and this
   assistant into amade-commons.

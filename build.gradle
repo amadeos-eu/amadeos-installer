@@ -118,7 +118,7 @@ Section: admin
 Priority: optional
 Architecture: all
 Depends: openjdk-25-jre | java-runtime (>= 25), squashfs-tools, dosfstools, e2fsprogs, grub2-common, grub-pc-bin, grub-efi-amd64-bin, efibootmgr, pkexec, polkitd
-Recommends: shim-signed, grub-efi-amd64-signed
+Recommends: shim-signed, grub-efi-amd64-signed, os-prober
 Maintainer: amadeOS Project <developers@datazuul.com>
 Description: Installs the amadeOS live system onto a disk
  A step-by-step assistant in the CDE style (language, keyboard, time zone,
