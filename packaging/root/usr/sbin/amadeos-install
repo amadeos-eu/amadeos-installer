@@ -229,7 +229,7 @@ else
     if [ "$FIRMWARE" = "uefi" ]; then
         if [ -z "$EFI_PARTITION" ]; then
             EFI_PARTITION="$(lsblk -nrpo NAME,PARTTYPE "$DISK_OF_ROOT" \
-                | awk -v t="$(echo "$TYPE_EFI" | tr 'A-Z' 'a-z')" 'tolower($2) == t { print $1; exit }')"
+                | awk -v t="$(echo "$TYPE_EFI" | tr '[:upper:]' '[:lower:]')" 'tolower($2) == t { print $1; exit }')"
             [ -n "$EFI_PARTITION" ] || fail "No EFI System Partition on $DISK_OF_ROOT; give one with --efi-partition"
         fi
         is_block "$EFI_PARTITION" || fail "$EFI_PARTITION is not a block device"

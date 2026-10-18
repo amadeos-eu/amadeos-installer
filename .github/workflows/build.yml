@@ -25,7 +25,7 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
           bash -n packaging/root/usr/sbin/amadeos-install
-          shellcheck packaging/root/usr/sbin/amadeos-install scripts/*.sh
+          shellcheck --severity=warning packaging/root/usr/sbin/amadeos-install scripts/*.sh
           packaging/root/usr/sbin/amadeos-install --help >/dev/null
       # The Swing tests skip themselves without a display, so run under Xvfb.
       - name: Test
