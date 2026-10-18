@@ -100,12 +100,24 @@ On UEFI machines the EFI System Partition of the disk is shared: amadeOS puts it
 `os-prober` is switched on in the installed GRUB, so the boot menu offers *Windows Boot Manager*
 next to amadeOS.
 
-Before doing this on a laptop: switch Secure Boot off to boot the live stick (the live image's own
-loader is unsigned; the installed system boots with Secure Boot on again through Debian's signed
-shim), have the BitLocker recovery key at hand in case Windows asks for it after the firmware's boot
-entries changed, and switch off Windows' fast startup if its partitions should be readable from
-amadeOS. Windows keeps the hardware clock in local time, Linux in UTC; the clock may be off by the
-time zone offset in one of them until that is settled, which the installer does not do yet.
+Before doing this on a laptop:
+
+- **Secure Boot** must be off to boot the live stick, because the live image's own loader is
+  unsigned. The installed system boots with Secure Boot on again, through Debian's signed shim, so
+  it can be switched back on afterwards.
+- **BitLocker.** Windows seals its disk encryption key to the firmware state. Switching Secure Boot
+  off and on, or a changed boot order, can change that state, and Windows then asks once for its
+  48-digit recovery key at the next start; after that it reseals and stops asking. So check in
+  Windows first whether BitLocker is on (an administrator command prompt, `manage-bde -status C:`;
+  *Protection On* means yes) and have the key at hand. It is found at
+  <https://account.microsoft.com/devices/recoverykey> for a Microsoft account (laptops sold with
+  Windows 11 usually saved it there at the first sign-in), under *Settings → Privacy & security →
+  Device encryption* or *Manage BitLocker* in the Control Panel (*Back up your recovery key*) in
+  Windows itself, or with the organisation's administrator for a work or school account.
+- **Fast startup** in Windows leaves its partitions in a hibernated state that amadeOS cannot
+  safely mount; switch it off in the power options if those partitions should be readable.
+- **The clock.** Windows keeps the hardware clock in local time, Linux in UTC, so one of the two
+  shows the time off by the zone offset until that is settled; the installer does not do it yet.
 
 ## Building
 
