@@ -1,6 +1,6 @@
 # amadeos-installer
 
-**amadeos-installer** installs the [amadeOS](https://github.com/datazuul/amadeos) live system onto a
+**amadeos-installer** installs the [amadeOS](https://github.com/amadeos-eu/amadeos) live system onto a
 hard disk: a step-by-step assistant in the CDE style, and the script `amadeos-install` that does the
 work as root.
 
@@ -132,7 +132,7 @@ the script (`/usr/sbin/amadeos-install`), the polkit action and rule, a desktop 
 drawer of the front panel (`Categories=System;Settings;`) and the icon. It depends on `squashfs-tools`,
 `dosfstools`, `e2fsprogs`, `grub2-common`, `grub-pc-bin`, `grub-efi-amd64-bin`, `efibootmgr` and
 `pkexec`, and recommends `shim-signed` and `grub-efi-amd64-signed` for Secure Boot.
-[amade-commons](https://github.com/datazuul/amade-commons) is taken from JitPack, or built from a
+[amade-commons](https://github.com/amadeos-eu/amade-commons) is taken from JitPack, or built from a
 checkout in `../amade-commons`.
 
 To try the assistant on a development machine, without root and without a disk, let it run the
