@@ -6,7 +6,7 @@
      the administrator's password. -->
 <policyconfig>
   <vendor>amadeOS</vendor>
-  <vendor_url>https://github.com/datazuul/amadeos</vendor_url>
+  <vendor_url>https://github.com/amadeos-eu/amadeos</vendor_url>
   <action id="eu.amadeos.installer.install">
     <description>Install amadeOS onto a disk</description>
     <description xml:lang="de">amadeOS auf eine Festplatte installieren</description>
