@@ -12,7 +12,6 @@ import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JTextArea;
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.GridBagConstraints;
@@ -66,7 +65,7 @@ final class LanguagePage extends WizardPage {
         form.add(new JPanel(), c);
         if (!facts.isLiveSystem()) {
             JTextArea warning = paragraph(tr("language.not-live"));
-            warning.setForeground(new Color(0xA0, 0x10, 0x10));
+            warning.setForeground(InstallerWindow.problemColour());
             c.gridx = 0;
             c.gridy = 1;
             c.gridwidth = 3;

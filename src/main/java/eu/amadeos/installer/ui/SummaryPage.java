@@ -11,7 +11,6 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextArea;
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -31,7 +30,7 @@ final class SummaryPage extends WizardPage {
         holder.add(rows, BorderLayout.NORTH);
         add(holder, BorderLayout.CENTER);
         JPanel bottom = new JPanel(new BorderLayout(0, 6));
-        warning.setForeground(new Color(0xA0, 0x10, 0x10));
+        warning.setForeground(InstallerWindow.problemColour());
         warning.setFont(warning.getFont().deriveFont(Font.BOLD));
         bottom.add(warning, BorderLayout.NORTH);
         bottom.add(confirm, BorderLayout.CENTER);

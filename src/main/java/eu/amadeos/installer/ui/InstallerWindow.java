@@ -101,7 +101,7 @@ public final class InstallerWindow extends JFrame {
         buttons.add(next);
         buttons.add(Box.createHorizontalStrut(12));
         buttons.add(cancel);
-        problem.setForeground(new Color(0xA0, 0x10, 0x10));
+        problem.setForeground(InstallerWindow.problemColour());
         JPanel bottom = new JPanel(new BorderLayout(12, 4));
         bottom.setBorder(BorderFactory.createEmptyBorder(4, 16, 10, 10));
         bottom.add(new JSeparator(), BorderLayout.NORTH);
@@ -232,5 +232,11 @@ public final class InstallerWindow extends JFrame {
 
     SystemFacts facts() {
         return facts;
+    }
+
+    /** Red for a problem, light enough to read on a dark palette. */
+    static Color problemColour() {
+        return eu.amadeos.commons.theme.DesktopTheme.isDark(eu.amadeos.commons.swing.AmadeUI.theme().base())
+                ? new Color(0xFF, 0x7B, 0x72) : new Color(0xA0, 0x10, 0x10);
     }
 }

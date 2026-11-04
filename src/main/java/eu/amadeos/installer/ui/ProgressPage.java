@@ -10,7 +10,6 @@ import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Font;
 import java.util.Optional;
 
@@ -94,7 +93,7 @@ final class ProgressPage extends WizardPage implements InstallRunner.Listener {
             window.jumpTo(FinishPage.class);
         } else {
             step.setText(tr("progress.failed", result.error().orElse(tr("progress.failed.exit", result.exitCode()))));
-            step.setForeground(new Color(0xA0, 0x10, 0x10));
+            step.setForeground(InstallerWindow.problemColour());
             window.showProblem(tr("progress.failed", result.error().orElse("")));
             started = false;  // Back to the summary and Next again retries
         }
