@@ -87,8 +87,12 @@ tasks.register('deb') {
             into optDir
             rename { 'amadeos-installer.jar' }
         }
+        // The options all amadeOS programs share (heap, garbage collector) come first from the argument file
+        // amadeos-session installs; the options after it win over them.
         new File(binDir, 'amadeos-installer').text = """#!/bin/sh
-exec /usr/bin/java -jar /opt/amadeos-installer/amadeos-installer.jar "\$@"
+OPTIONS=/etc/amadeos/java/app.options
+[ -r "\$OPTIONS" ] || OPTIONS=/dev/null
+exec /usr/bin/java "@\$OPTIONS" -jar /opt/amadeos-installer/amadeos-installer.jar "\$@"
 """
         // packaging/root mirrors the file system: usr/sbin/amadeos-install, the polkit action and rule.
         copy {
@@ -121,7 +125,7 @@ Version: ${debVersion}
 Section: admin
 Priority: optional
 Architecture: all
-Depends: openjdk-25-jre | java-runtime (>= 25), squashfs-tools, dosfstools, e2fsprogs, grub2-common, grub-pc-bin, grub-efi-amd64-bin, efibootmgr, pkexec, polkitd
+Depends: openjdk-25-jre | java-runtime (>= 25), amadeos-java-options, squashfs-tools, dosfstools, e2fsprogs, grub2-common, grub-pc-bin, grub-efi-amd64-bin, efibootmgr, pkexec, polkitd
 Recommends: shim-signed, grub-efi-amd64-signed, os-prober
 Maintainer: amadeOS Project <developers@datazuul.com>
 Description: Installs the amadeOS live system onto a disk
