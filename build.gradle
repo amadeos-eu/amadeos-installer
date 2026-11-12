@@ -87,8 +87,12 @@ tasks.register('deb') {
             into optDir
             rename { 'amadeos-installer.jar' }
         }
+        // The options all amadeOS programs share (heap, garbage collector) come first from the argument file
+        // amadeos-session installs; the options after it win over them.
         new File(binDir, 'amadeos-installer').text = """#!/bin/sh
-exec /usr/bin/java -jar /opt/amadeos-installer/amadeos-installer.jar "\$@"
+OPTIONS=/etc/amadeos/java/app.options
+[ -r "\$OPTIONS" ] || OPTIONS=/dev/null
+exec /usr/bin/java "@\$OPTIONS" -jar /opt/amadeos-installer/amadeos-installer.jar "\$@"
 """
         // packaging/root mirrors the file system: usr/sbin/amadeos-install, the polkit action and rule.
         copy {
